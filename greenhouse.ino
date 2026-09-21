@@ -2,7 +2,6 @@
 #include <DFRobot_DHT11.h>
 DFRobot_DHT11 DHT;
 
-
 #define PIN_SEN_LIGHT A0
 #define PIN_SEN_WET_EARTH_1 A1
 #define PIN_SEN_WET_EARTH_2 A2
@@ -21,12 +20,12 @@ unsigned long current_time = 0;
 unsigned long interval_read_sensor = 400;
 unsigned int soil_humidity_1, soil_humidity_2, soil_humidity_3;
 
-
 struct Climate
 {
     int MIN_ILLUMINATION;
     int MIN_SOIL_HUMIDITY;
     int MIN_AIR_HUMIDITY;
+    int MAX_AIR_HUMIDITY;
     int MIN_TEMP_AIR;
     int MAX_TEMP_AIR;
 
@@ -34,12 +33,12 @@ struct Climate
     int TIME_SUNSET_MINUTES;
 
     int TIME_WATERING_SECONDS;
-    int TIME_VENTILATION_SECONDS;  
+    int TIME_WAITING_DATA_WATERING_SECONDS;
+    int TIME_VENTILATION_SECONDS;
 };
 
 typedef struct Climate Climate;
 Climate Greenhouse;
-
 
 struct Status_flag
 {
@@ -52,25 +51,23 @@ struct Status_flag
 typedef struct Status_flag Status_flag;
 Status_flag Greenhouse_Status_flag;
 
-
 struct Sensor
 {
-  int air_humidity;
-  int air_temperature;
-  int illumination;
-  int soil_humidity;
+    int air_humidity;
+    int air_temperature;
+    int illumination;
+    int soil_humidity;
 };
 
 typedef struct Sensor Sensor;
 Sensor Greenhouse_sensor;
-
 
 void initialize_climate_pumpkin()
 {
     Greenhouse.MIN_ILLUMINATION = 800;
     Greenhouse.MIN_SOIL_HUMIDITY = 900;
     Greenhouse.MIN_AIR_HUMIDITY = 30;
-    Greenhouse.MAx_AIR_HUMIDITY = 70;
+    Greenhouse.MAX_AIR_HUMIDITY = 70;
     Greenhouse.MIN_TEMP_AIR = 20;
     Greenhouse.MAX_TEMP_AIR = 27;
 
@@ -82,7 +79,6 @@ void initialize_climate_pumpkin()
     Greenhouse.TIME_VENTILATION_SECONDS = 360;
 }
 
-
 void set_time()
 {
     start_time_minutes = (hour() * 60) + minute();
@@ -92,30 +88,26 @@ void set_time()
     Serial.print(minute());
 }
 
-
 void illumination_read()
 {
-    
     if ((current_time - last_time_illumination) > interval_read_sensor) {
         Greenhouse_sensor.illumination = analogRead(PIN_SEN_LIGHT);
-        
+
         last_time_illumination = current_time;
     }
 }
-
 
 void air_temp_humidity_read()
 {
     if ((current_time - last_time_air_temp_humidity) > interval_read_sensor) {
         DHT.read(PIN_SEN_TEMP_WET);
 
-        Greenhouse_sensor.air_humidity  = DHT.humidity;
+        Greenhouse_sensor.air_humidity = DHT.humidity;
         Greenhouse_sensor.air_temperature = DHT.temperature;
-        
+
         last_time_air_temp_humidity = current_time;
     }
 }
-
 
 void soil_humidity_read()
 {
@@ -129,16 +121,20 @@ void soil_humidity_read()
         del_1 = abs(soil_humidity_2 - soil_humidity_1);
         del_2 = abs(soil_humidity_3 - soil_humidity_2);
         del_3 = abs(soil_humidity_3 - soil_humidity_1);
-            
-        if ((del_2 > 100) && (del_3 > 100)) {Greenhouse_sensor.soil_humidity = (soil_humidity_2 + soil_humidity_1) / 2}
-        if ((del_3 > 100) && (del_1 > 100)) {Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_2) / 2}
-        if ((del_1 > 100) && (del_2 > 100)) {Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_1) / 2}
-        else {Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_2 + soil_humidity_1) / 3}
+
+        if ((del_2 > 100) && (del_3 > 100)) {
+            Greenhouse_sensor.soil_humidity = (soil_humidity_2 + soil_humidity_1) / 2;
+        } else if ((del_3 > 100) && (del_1 > 100)) {
+            Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_2) / 2;
+        } else if ((del_1 > 100) && (del_2 > 100)) {
+            Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_1) / 2;
+        } else {
+            Greenhouse_sensor.soil_humidity = (soil_humidity_3 + soil_humidity_2 + soil_humidity_1) / 3;
+        }
 
         last_time_soil_humidity = current_time;
     }
 }
-
 
 void print_sensor_read()
 {
@@ -149,78 +145,65 @@ void print_sensor_read()
     Serial.print("Влажность воздуха: ");
     Serial.println(Greenhouse_sensor.air_humidity);
     Serial.print("Температура: ");
-    Serial.println(Greenhouse_sensor.air_temperature);  
+    Serial.println(Greenhouse_sensor.air_temperature);
 }
-
 
 void control_light()
 {
-    unsigned long current_time = ((millis() * 1000 * 60) + start_time_minutes) % (24 * 60);
+    unsigned long current_time_minutes = ((millis() / 60000) + start_time_minutes) % (24 * 60);
 
-    if ((current_time > Greenhouse.TIME_SUNRISE_MINUTES) && (current_time < Greenhouse.TIME_SUNSET_MINUTES)) {
+    if ((current_time_minutes > Greenhouse.TIME_SUNRISE_MINUTES) && (current_time_minutes < Greenhouse.TIME_SUNSET_MINUTES)) {
         if ((Greenhouse_sensor.illumination > Greenhouse.MIN_ILLUMINATION) && (Greenhouse_Status_flag.WATER_PUMP == 0)) {
-            
             digitalWrite(PIN_DIR_LIGHT, 1);
-
             Greenhouse_Status_flag.LIGHT = 1;
-        }
-        else {
-            
+        } else {
             digitalWrite(PIN_DIR_LIGHT, 0);
-
             Greenhouse_Status_flag.LIGHT = 0;
         }
     }
 }
-
 
 void control_temperature()
 {
     static unsigned long timer;
 
     if ((Greenhouse_sensor.air_temperature < Greenhouse.MIN_TEMP_AIR) && (Greenhouse_Status_flag.HEAT == 0) && (Greenhouse_Status_flag.VENTILATION == 0)) {
-        
         digitalWrite(PIN_DIR_COOLER, 1);
         digitalWrite(PIN_DIR_HEAT, 1);
 
         Greenhouse_Status_flag.HEAT = 1;
-        Greenhouse_Status_flag.VENTILATION  = 1;
+        Greenhouse_Status_flag.VENTILATION = 1;
 
         timer = millis();
     }
 
     if ((millis() - timer) > Greenhouse.TIME_VENTILATION_SECONDS) {
-        
         digitalWrite(PIN_DIR_COOLER, 0);
         digitalWrite(PIN_DIR_HEAT, 0);
 
         Greenhouse_Status_flag.HEAT = 0;
-        Greenhouse_Status_flag.VENTILATION  = 0;
+        Greenhouse_Status_flag.VENTILATION = 0;
     }
 }
-
 
 void control_ventilation()
 {
     static unsigned long timer;
 
-    if (((Greenhouse_sensor.air_temperature > Greenhouse.MAX_TEMP_AIR) || (Greenhouse_sensor.air_humidity > Greenhouse.MIN_AIR_HUMIDITY)) && (Greenhouse_Status_flag.VENTILATION == 0)) {
-        
+    if (((Greenhouse_sensor.air_temperature > Greenhouse.MAX_TEMP_AIR) || (Greenhouse_sensor.air_humidity > Greenhouse.MAX_AIR_HUMIDITY)) && (Greenhouse_Status_flag.VENTILATION == 0)) {
         digitalWrite(PIN_DIR_COOLER, 1);
 
-        Greenhouse_Status_flag.VENTILATION  = 1;
+        Greenhouse_Status_flag.VENTILATION = 1;
 
         timer = millis();
     }
 
     if ((millis() - timer) > Greenhouse.TIME_VENTILATION_SECONDS) {
-        
         digitalWrite(PIN_DIR_COOLER, 0);
-        
-        Greenhouse_Status_flag.VENTILATION  = 0;
+
+        Greenhouse_Status_flag.VENTILATION = 0;
     }
 }
-
 
 void control_watering()
 {
@@ -228,41 +211,40 @@ void control_watering()
     static unsigned long timer_waiting;
     static bool flag_waiting = 0;
 
-    if ((Greenhouse_sensor.soil_humidity > Greenhouse.MIN_SOIL_HUMIDITY) && (Greenhouse_Status_flag.WATER_PUMP == 0) && (flag_waiting = 0)) {
-
+    if ((Greenhouse_sensor.soil_humidity > Greenhouse.MIN_SOIL_HUMIDITY) && (Greenhouse_Status_flag.WATER_PUMP == 0) && (flag_waiting == 0)) {
         if (Greenhouse_Status_flag.HEAT == 1) {
-            digitalWrite(PIN_DIR_HEAT, 0);    
-            Greenhouse_Status_flag.HEAT = 0;   
+            digitalWrite(PIN_DIR_HEAT, 0);
+            Greenhouse_Status_flag.HEAT = 0;
         }
 
         digitalWrite(PIN_DIR_WATER_PUMP, 1);
-        
-        Greenhouse_Status_flag.WATER_PUMP = 1; 
+
+        Greenhouse_Status_flag.WATER_PUMP = 1;
 
         timer = millis();
     }
 
-    if  ((millis() - timer) > Greenhouse.TIME_WATERING_SECONDS) {
+    if ((millis() - timer) > Greenhouse.TIME_WATERING_SECONDS) {
         digitalWrite(PIN_DIR_WATER_PUMP, 0);
-        
+
         Greenhouse_Status_flag.WATER_PUMP = 0;
 
         flag_waiting = 1;
         timer_waiting = millis();
     }
 
-    if (millis() - timer_waiting == Greenhouse.TIME_WAITING_DATA_WATERING_SECONDS) {
+    if (millis() - timer_waiting >= Greenhouse.TIME_WAITING_DATA_WATERING_SECONDS) {
         flag_waiting = 0;
     }
 }
 
-
-void pin_initialization() {
+void pin_initialization()
+{
     pinMode(PIN_SEN_LIGHT, INPUT);
     pinMode(PIN_SEN_WET_EARTH_1, INPUT);
     pinMode(PIN_SEN_WET_EARTH_2, INPUT);
     pinMode(PIN_SEN_WET_EARTH_3, INPUT);
-    pinMode(PIN_SEN_TEMP_WET, OUTPUT);
+    pinMode(PIN_SEN_TEMP_WET, INPUT);
 
     pinMode(PIN_DIR_HEAT, OUTPUT);
     pinMode(PIN_DIR_WATER_PUMP, OUTPUT);
@@ -270,8 +252,8 @@ void pin_initialization() {
     pinMode(PIN_DIR_COOLER, OUTPUT);
 }
 
-
-void setup() {
+void setup()
+{
     Serial.begin(9600);
 
     pin_initialization();
@@ -282,8 +264,8 @@ void setup() {
     delay(10);
 }
 
-
-void loop() {
+void loop()
+{
     current_time = millis();
 
     illumination_read();
